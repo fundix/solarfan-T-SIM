@@ -8,6 +8,9 @@
 // Set serial for debug console (to the Serial Monitor, default speed 115200)
 #define SerialMon Serial
 
+#define TINY_GSM_DEBUG Serial
+#define isNBIOT false
+
 // See all AT commands, if wanted
 // #define DUMP_AT_COMMANDS
 
@@ -23,5 +26,12 @@
 #define SD_SCLK 14
 #define SD_CS 13
 #define LED_PIN 12
+
+#define PIN_ADC_BAT 35
+#define PIN_ADC_SOLAR 36
+#define ADC_BATTERY_LEVEL_SAMPLES 100
+
+#define I2C_SDA 21
+#define I2C_SCL 22
 
 #endif // GLOBALS_H
