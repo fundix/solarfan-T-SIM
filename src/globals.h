@@ -3,7 +3,7 @@
 
 #define TINY_GSM_MODEM_SIM7000
 #define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
-#define TINY_GSM_YIELD_MS 2
+// #define TINY_GSM_YIELD_MS 2
 
 #define SerialAT Serial1
 // Set serial for debug console (to the Serial Monitor, default speed 115200)

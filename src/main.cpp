@@ -14,8 +14,7 @@
 #include "globals.h"
 #include "credentials.h"
 #include <TinyGsmClient.h>
-// #include <StreamDebugger.h>
-// StreamDebugger debugger(SerialAT, Serial);
+#include <PubSubClient.h>
 
 #define BTN1 41 // Definice pinu pro tlačítko (GPIO 41)
 
@@ -142,17 +141,17 @@ static bool longButtonPressed = false;
 static bool updateStarted = false;
 static float rotationAngle = 0.0f; // Úhel rotace pro displej
 
-#define DUMP_AT_COMMANDS // If you need to debug, you can open this macro definition and TinyGsmClientSIM7028.h line 13 //#define TINY_GSM_DEBUG Serial
+// #define DUMP_AT_COMMANDS // If you need to debug, you can open this macro definition and TinyGsmClientSIM7028.h line 13 //#define TINY_GSM_DEBUG Serial
 #ifdef DUMP_AT_COMMANDS
 #include <StreamDebugger.h>
 StreamDebugger debugger(SerialAT, Serial);
 TinyGsm modem(debugger);
 #else
-TinyGsm modem(SerialAT, -1);
+TinyGsm modem(SerialAT);
 #endif
 
 TinyGsmClient client(modem);
-void mqttSetup();
+PubSubClient mqtt(client);
 bool mqttConnect();
 void publishMeasurements();
 
@@ -458,10 +457,15 @@ bool modemConnect()
     if (modem.getSimStatus() != SIM_READY)
         return false;
 
-    // 3) Radio setup – allow GSM fallback but prefer LTE IoT
-    modem.sendAT("+CBAND=ALL_MODE"); // let FW scan entire band map
-    modem.setPreferredMode(3);       // 3 = Cat‑M + NB‑IoT
-    modem.setNetworkMode(2);         // 2 = Automatic (LTE+GSM)
+    // 3) Radio setup – GSM‑only (2 G) – faster attach, no LTE
+    // Allow just GSM bands; you can narrow the list further if desired
+    modem.sendAT("+CBAND=GSM850P,GSM900P,DCS1800P,PCS1900P");
+    modem.setPreferredMode(1); // 1 = GSM
+    modem.setNetworkMode(1);   // 1 = GSM only
+
+    // modem.sendAT("+CBAND=ALL_MODE"); // let FW scan entire band map
+    // modem.setPreferredMode(3);       // 3 = Cat‑M + NB‑IoT
+    // modem.setNetworkMode(2);         // 2 = Automatic (LTE+GSM)
 
     // 4) Wait for network registration (max 180 s)
     SIM70xxRegStatus reg;
@@ -483,32 +487,32 @@ bool modemConnect()
     return true; // modem has IP, ready for MQTT
 }
 
-// void mqttCallback(char *topic, byte *payload, unsigned int len)
-// {
-//   ESP_LOGI(TAG, "Message arrived [%s]: %.*s", topic, len, payload);
-//
-//   // Only proceed if incoming message's topic matches
-//   if (String(topic) == topicControl)
-//   {
-//     // ledStatus = !ledStatus;
-//     // Convert payload to string and then to integer
-//     String msg = String((char *)payload, len);
-//     pwm = msg.toInt();
-//     // Ensure pwm value is within valid range (0‑PWM_MAX for 10‑bit resolution)
-//     pwm = constrain(pwm, 0, PWM_MAX); // Udrž hodnotu v rozsahu rozlišení
-//     // Set PWM value
-//     if (pwm < PWM_MIN)
-//     {
-//       pwm = 0; // Ensure minimum duty cycle
-//     }
-//
-//     ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(PWM_CHANNEL), pwm);
-//     ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(PWM_CHANNEL));
-//     ESP_LOGI(TAG, "Setting PWM to %d", pwm);
-//     // digitalWrite(LED_PIN, ledStatus);
-//     // mqtt.publish(topicLedStatus, ledStatus ? "1" : "0");
-//   }
-// }
+void mqttCallback(char *topic, byte *payload, unsigned int len)
+{
+    ESP_LOGI(TAG, "Message arrived [%s]: %.*s", topic, len, payload);
+
+    // Only proceed if incoming message's topic matches
+    if (String(topic) == topicControl)
+    {
+        // ledStatus = !ledStatus;
+        // Convert payload to string and then to integer
+        String msg = String((char *)payload, len);
+        pwm = msg.toInt();
+        // Ensure pwm value is within valid range (0‑PWM_MAX for 10‑bit resolution)
+        pwm = constrain(pwm, 0, PWM_MAX); // Udrž hodnotu v rozsahu rozlišení
+        // Set PWM value
+        if (pwm < PWM_MIN)
+        {
+            pwm = 0; // Ensure minimum duty cycle
+        }
+
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(PWM_CHANNEL), pwm);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(PWM_CHANNEL));
+        ESP_LOGI(TAG, "Setting PWM to %d", pwm);
+        // digitalWrite(LED_PIN, ledStatus);
+        // mqtt.publish(topicLedStatus, ledStatus ? "1" : "0");
+    }
+}
 
 // void modem_reset()
 // {
@@ -623,26 +627,26 @@ void setupPWM()
     ledc_stop(LEDC_LOW_SPEED_MODE, (ledc_channel_t)PWM_CHANNEL, 0);
 }
 
-// boolean mqttConnect()
-// {
-//   ESP_LOGI(TAG, "Connecting to MQTT broker %s:%d", broker, mqttPort);
-//
-//   // Connect to MQTT Broker
-//   boolean status = mqtt.connect("SolarFan", MQTT_USER, MQTT_PASS);
-//
-//   // Or, if you want to authenticate MQTT:
-//   // boolean status = mqtt.connect("GsmClientName", "mqtt_user", "mqtt_pass");
-//
-//   if (!status)
-//   {
-//     ESP_LOGI(TAG, "fail (state = %d)", mqtt.state());
-//     return false;
-//   }
-//   ESP_LOGI(TAG, "success");
-//   // mqtt.publish(topicInit, "GsmClientTest started");
-//   mqtt.subscribe(topicControl);
-//   return mqtt.connected();
-// }
+bool mqttConnect()
+{
+    ESP_LOGI(TAG, "Connecting to MQTT broker %s:%d", broker, mqttPort);
+
+    // Connect to MQTT Broker
+    bool status = mqtt.connect("SolarFan", MQTT_USER, MQTT_PASS);
+
+    // Or, if you want to authenticate MQTT:
+    // bool status = mqtt.connect("GsmClientName", "mqtt_user", "mqtt_pass");
+
+    if (!status)
+    {
+        ESP_LOGI(TAG, "fail (state = %d)", mqtt.state());
+        return false;
+    }
+    ESP_LOGI(TAG, "success");
+    // mqtt.publish(topicInit, "GsmClientTest started");
+    mqtt.subscribe(topicControl);
+    return mqtt.connected();
+}
 
 void publishMeasurements()
 {
@@ -658,46 +662,14 @@ void publishMeasurements()
     payload += ",\"pwm\":" + String(pwm);
     payload += "}";
 
-    // 1) Publish topic
-    String cmdTopic = String("+CMQTTTOPIC=0,") + strlen(topicStatus);
-    modem.sendAT(cmdTopic.c_str());
-    modem.waitResponse();
-    SerialAT.print(topicStatus);
-    modem.waitResponse();
-
-    // 2) Publish payload
-    String cmdPayload = String("+CMQTTPAYLOAD=0,") + payload.length();
-    modem.sendAT(cmdPayload.c_str());
-    modem.waitResponse();
-    SerialAT.print(payload);
-    modem.waitResponse();
-
-    // 3) Send PUBLISH
-    modem.sendAT("+CMQTTPUB=0,0,60");
-    modem.waitResponse(20000L);
+    if (mqtt.connected())
+    {
+        mqtt.publish(topicStatus, payload.c_str());
+    }
 }
 
 void setup()
 {
-
-    pinMode(PIN_ADC_BAT, INPUT);
-    pinMode(PIN_ADC_SOLAR, INPUT);
-
-    uint16_t v_bat = 0;
-    uint16_t v_solar = 0;
-
-    // while (1)
-    // {
-    read_adc_bat(&v_bat);
-    Serial.print("BAT: ");
-    Serial.print(v_bat);
-
-    read_adc_solar(&v_solar);
-    Serial.print(" SOLAR: ");
-    Serial.println(v_solar);
-
-    //   delay(1000);
-    // }
 
     // setupPWM();
     // Inicializace NVS pro ukládání nastavení displeje
@@ -714,6 +686,19 @@ void setup()
 
     Serial.begin(115200);                  // Inicializace sériové komunikace
     vTaskDelay(2000 / portTICK_PERIOD_MS); // Zpoždění pro připojení sériového monitoru
+
+    pinMode(PIN_ADC_BAT, INPUT);
+    pinMode(PIN_ADC_SOLAR, INPUT);
+
+    uint16_t v_bat = 0;
+    uint16_t v_solar = 0;
+    read_adc_bat(&v_bat);
+    Serial.print("BAT: ");
+    Serial.print(v_bat);
+
+    read_adc_solar(&v_solar);
+    Serial.print(" SOLAR: ");
+    Serial.println(v_solar);
 
     // Create FreeRTOS timer for publishing measurements every 5 minutes
     static TimerHandle_t publishTimer = NULL;
@@ -1087,8 +1072,8 @@ void gsmSetup()
 
     // gsmConnect();
 
-    // Initialize modem-native MQTT
-    mqttSetup();
+    mqtt.setServer(broker, mqttPort);
+    mqtt.setCallback(mqttCallback);
     if (!mqttConnect())
     {
         ESP_LOGE(TAG, "MQTT connect failed");
@@ -1098,9 +1083,6 @@ void gsmSetup()
     {
         ESP_LOGI(TAG, "Network connected");
     }
-    // MQTT Broker setup (removed)
-    // mqtt.setServer(broker, mqttPort);
-    // mqtt.setCallback(mqttCallback);
 }
 
 void gsmLoop()
@@ -1136,7 +1118,15 @@ void gsmLoop()
         //   }
         // }
     }
-    // NOTE: No mqtt.state(), mqtt.connected(), or mqtt.loop() calls.
+    if (mqtt.connected())
+    {
+        mqtt.loop();
+    }
+    else
+    {
+        mqttConnected = false;
+        mqttConnect();
+    }
 }
 
 void gsmTask(void *pvParameters)
@@ -1209,21 +1199,6 @@ void gsmConnect(void)
     ESP_LOGI(TAG, "Device IP address: %s", ip.c_str());
 
     ESP_LOGI(TAG, "success");
-}
-
-void mqttSetup()
-{
-    modem.sendAT("+CMQTTSTART");
-    modem.waitResponse();
-    modem.sendAT("+CMQTTACCQ=0,\"solarfan_client\",0");
-    modem.waitResponse();
-}
-
-bool mqttConnect()
-{
-    String cmd = String("+CMQTTCONNECT=0,\"tcp://") + broker + ":" + mqttPort + "\",60,1";
-    modem.sendAT(cmd.c_str());
-    return (modem.waitResponse(20000L, "+CMQTTCONNECT: 0,0") == 1);
 }
 
 void read_adc_bat(uint16_t *voltage)
