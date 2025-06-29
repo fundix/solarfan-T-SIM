@@ -11,14 +11,6 @@
 // See all AT commands, if wanted
 // #define DUMP_AT_COMMANDS
 
-// set GSM PIN, if any
-#define GSM_PIN ""
-
-// Your GPRS credentials, if any
-const char apn[] = "hologram"; // SET TO YOUR APN
-const char gprsUser[] = "";
-const char gprsPass[] = "";
-
 // LilyGO T-SIM7000G Pinout
 #define UART_BAUD 115200
 #define PIN_DTR 25

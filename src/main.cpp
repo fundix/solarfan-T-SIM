@@ -1,8 +1,11 @@
 #include <TinyGsmClient.h>
-#include <SPI.h>
-// #include <SD.h>
+#include <PubSubClient.h>
 #include <Ticker.h>
+#include <SPI.h>
+
+#include <SPI.h>
 #include "globals.h"
+#include "credentials.h"
 
 #ifdef DUMP_AT_COMMANDS
 #include <StreamDebugger.h>
@@ -12,44 +15,8 @@ TinyGsm modem(debugger);
 TinyGsm modem(SerialAT);
 #endif
 
-// set GSM PIN, if any
-#define GSM_PIN ""
-
-// Your GPRS credentials, if any
-const char apn[] = "YourAPN";
-const char gprsUser[] = "";
-const char gprsPass[] = "";
-
-// Your WiFi connection credentials, if applicable
-const char wifiSSID[] = "YourSSID";
-const char wifiPass[] = "YourWiFiPass";
-
-// MQTT details
-const char *broker = "broker.hivemq.com";
-
-const char *topicLed = "GsmClientTest/led";
-const char *topicInit = "GsmClientTest/init";
-const char *topicLedStatus = "GsmClientTest/ledStatus";
-
-#include <TinyGsmClient.h>
-#include <PubSubClient.h>
-#include <Ticker.h>
-#include <SPI.h>
-#include <SD.h>
-
-// Just in case someone defined the wrong thing..
-#if TINY_GSM_USE_GPRS && not defined TINY_GSM_MODEM_HAS_GPRS
-#undef TINY_GSM_USE_GPRS
-#undef TINY_GSM_USE_WIFI
-#define TINY_GSM_USE_GPRS false
-#define TINY_GSM_USE_WIFI true
-#endif
-#if TINY_GSM_USE_WIFI && not defined TINY_GSM_MODEM_HAS_WIFI
-#undef TINY_GSM_USE_GPRS
-#undef TINY_GSM_USE_WIFI
-#define TINY_GSM_USE_GPRS true
-#define TINY_GSM_USE_WIFI false
-#endif
+const char *topicStatus = "solarfan/status";
+const char *topicControl = "solarfan/control";
 
 #ifdef DUMP_AT_COMMANDS
 #include <StreamDebugger.h>
