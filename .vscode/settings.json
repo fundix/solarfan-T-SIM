@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "*.ini.php": "ini",
+        "*.php": "php",
+        "*.html": "html",
+        "*.vue": "vue",
+        "*.h": "c",
+        "*.tpl": "smarty",
+        "*.tsx": "javascriptreact",
+        "*.tpp": "cpp"
+    }
+}
