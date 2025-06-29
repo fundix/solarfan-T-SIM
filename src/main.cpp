@@ -685,7 +685,7 @@ void setup()
     // setCpuFrequencyMhz(80); // 80 MHz místo výchozích 240 MHz
 
     Serial.begin(115200);                  // Inicializace sériové komunikace
-    vTaskDelay(2000 / portTICK_PERIOD_MS); // Zpoždění pro připojení sériového monitoru
+    vTaskDelay(4000 / portTICK_PERIOD_MS); // Zpoždění pro připojení sériového monitoru
 
     pinMode(PIN_ADC_BAT, INPUT);
     pinMode(PIN_ADC_SOLAR, INPUT);
@@ -1087,45 +1087,38 @@ void gsmSetup()
 
 void gsmLoop()
 {
-    // Make sure we're still registered on the network
-    if (!modem.isNetworkConnected())
-    {
-        ESP_LOGI(TAG, "Network disconnected");
-        if (!modem.waitForNetwork(180000L, true))
-        {
-            ESP_LOGI(TAG, " fail");
-            delay(10000);
-            return;
+    static uint32_t lastNetCheck   = 0;
+    static uint32_t lastMqttServe  = 0;
+
+    const uint32_t MQTT_LOOP_PERIOD = 500;    // serve MQTT every 0.5 s
+    const uint32_t NET_CHECK_PERIOD = 30000;  // check network every 30 s
+
+    uint32_t now = millis();
+
+    /* ---- MQTT keep‑alive ---- */
+    if (now - lastMqttServe >= MQTT_LOOP_PERIOD) {
+        lastMqttServe = now;
+
+        if (mqtt.connected()) {
+            mqtt.loop();            // fast, non‑blocking
+        } else {
+            mqttConnected = false;  // reflect status for GUI
+            mqttConnect();          // quick reconnect attempt
         }
-        if (modem.isNetworkConnected())
-        {
-            ESP_LOGI(TAG, "Network re-connected");
+    }
+
+    /* ---- Cellular link health ---- */
+    if (now - lastNetCheck >= NET_CHECK_PERIOD) {
+        lastNetCheck = now;
+
+        if (!modem.isNetworkConnected()) {
+            ESP_LOGI(TAG, "Network lost → reconnecting");
+            if (!modem.waitForNetwork(180000L, true)) {
+                ESP_LOGW(TAG, "Re‑attach failed, will retry later");
+            } else {
+                ESP_LOGI(TAG, "Network re‑attached");
+            }
         }
-        // and make sure GPRS/EPS is still connected
-        // if (!modem.isGprsConnected())
-        // {
-        //   ESP_LOGI(TAG, "GPRS disconnected!");
-        //   ESP_LOGI(TAG, "Connecting to %s", apn);
-        //   if (!modem.gprsConnect(apn, gprsUser, gprsPass))
-        //   {
-        //     ESP_LOGI(TAG, " fail");
-        //     delay(10000);
-        //     return;
-        //   }
-        //   if (modem.isGprsConnected())
-        //   {
-        //     ESP_LOGI(TAG, "GPRS reconnected");
-        //   }
-        // }
-    }
-    if (mqtt.connected())
-    {
-        mqtt.loop();
-    }
-    else
-    {
-        mqttConnected = false;
-        mqttConnect();
     }
 }
 
@@ -1135,7 +1128,7 @@ void gsmTask(void *pvParameters)
     for (;;)
     {
         gsmLoop();                           // keep GSM & MQTT alive
-        vTaskDelay(10 / portTICK_PERIOD_MS); // yield to other tasks
+        vTaskDelay(50 / portTICK_PERIOD_MS); // run every 50 ms → plenty for timers above
     }
 }
 
