@@ -509,6 +509,8 @@ void mqttCallback(char *topic, byte *payload, unsigned int len)
         ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(PWM_CHANNEL), pwm);
         ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(PWM_CHANNEL));
         ESP_LOGI(TAG, "Setting PWM to %d", pwm);
+
+        publishMeasurements();
         // digitalWrite(LED_PIN, ledStatus);
         // mqtt.publish(topicLedStatus, ledStatus ? "1" : "0");
     }
@@ -645,6 +647,8 @@ bool mqttConnect()
     ESP_LOGI(TAG, "success");
     // mqtt.publish(topicInit, "GsmClientTest started");
     mqtt.subscribe(topicControl);
+    publishMeasurements();
+
     return mqtt.connected();
 }
 
@@ -670,7 +674,9 @@ void publishMeasurements()
 
 void setup()
 {
-
+    // Initialize ESP log system
+    esp_log_level_set("*", ESP_LOG_INFO); // Set default log level to INFO for all tags
+    // esp_log_level_set(TAG, ESP_LOG_VERBOSE); // Set verbose logging for this module
     // setupPWM();
     // Inicializace NVS pro ukládání nastavení displeje
     // preferences.begin("display", false);
@@ -717,7 +723,6 @@ void setup()
     }
 
     Wire.begin();
-    // sleepSensors();
 
     if (ina228_bat.begin(bat_addr) && ina228_solar.begin(solar_addr))
     {
@@ -739,7 +744,7 @@ void setup()
         ESP_LOGE(TAG, "Failed to initialize INA228 devices");
     }
 
-    // ble_setup();
+    ble_setup();
     xTaskCreatePinnedToCore(gsmTask, "GSM", 8192, NULL, 1, NULL, 1);
 }
 
@@ -1087,35 +1092,44 @@ void gsmSetup()
 
 void gsmLoop()
 {
-    static uint32_t lastNetCheck   = 0;
-    static uint32_t lastMqttServe  = 0;
+    static uint32_t lastNetCheck = 0;
+    static uint32_t lastMqttServe = 0;
 
-    const uint32_t MQTT_LOOP_PERIOD = 500;    // serve MQTT every 0.5 s
-    const uint32_t NET_CHECK_PERIOD = 30000;  // check network every 30 s
+    const uint32_t MQTT_LOOP_PERIOD = 500;   // serve MQTT every 0.5 s
+    const uint32_t NET_CHECK_PERIOD = 30000; // check network every 30 s
 
     uint32_t now = millis();
 
     /* ---- MQTT keep‑alive ---- */
-    if (now - lastMqttServe >= MQTT_LOOP_PERIOD) {
+    if (now - lastMqttServe >= MQTT_LOOP_PERIOD)
+    {
         lastMqttServe = now;
 
-        if (mqtt.connected()) {
-            mqtt.loop();            // fast, non‑blocking
-        } else {
-            mqttConnected = false;  // reflect status for GUI
-            mqttConnect();          // quick reconnect attempt
+        if (mqtt.connected())
+        {
+            mqtt.loop(); // fast, non‑blocking
+        }
+        else
+        {
+            mqttConnected = false; // reflect status for GUI
+            mqttConnect();         // quick reconnect attempt
         }
     }
 
     /* ---- Cellular link health ---- */
-    if (now - lastNetCheck >= NET_CHECK_PERIOD) {
+    if (now - lastNetCheck >= NET_CHECK_PERIOD)
+    {
         lastNetCheck = now;
 
-        if (!modem.isNetworkConnected()) {
+        if (!modem.isNetworkConnected())
+        {
             ESP_LOGI(TAG, "Network lost → reconnecting");
-            if (!modem.waitForNetwork(180000L, true)) {
+            if (!modem.waitForNetwork(180000L, true))
+            {
                 ESP_LOGW(TAG, "Re‑attach failed, will retry later");
-            } else {
+            }
+            else
+            {
                 ESP_LOGI(TAG, "Network re‑attached");
             }
         }
