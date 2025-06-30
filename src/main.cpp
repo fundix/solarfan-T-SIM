@@ -93,28 +93,7 @@ const char *topicControl = "solarfan/control";
 void measure();
 // Funkce pro obsluhu nenalezených stránek webového serveru
 
-// Deklarace funkcí
-// --- Low‑power helpers ----------------------------------------------------
-/// Put MPU6886 into SLEEP mode (write 0x40 to register 0x6B)
-/// and be sure the on‑board IR LED is driven LOW.
-// static void sleepSensors()
-// {
-//     constexpr uint8_t MPU6886_ADDR = 0x68;
-//     constexpr uint8_t REG_PWR_MGMT_1 = 0x6B;
-//     Wire.beginTransmission(MPU6886_ADDR);
-//     Wire.write(REG_PWR_MGMT_1);
-//     Wire.write(0x40); // bit‑6 = SLEEP
-//     Wire.endTransmission();
-
-//     // IR LED on AtomS3/Lite is wired to GPIO2.
-//     // Drive it LOW so it sinks no current.
-//     constexpr gpio_num_t IR_PIN = GPIO_NUM_2;
-//     pinMode(IR_PIN, OUTPUT);
-//     digitalWrite(IR_PIN, LOW);
-
-//     ESP_LOGI(TAG, "MPU6886 asleep, IR LED off");
-// }
-void setupWiFiClient();
+// void setupWiFiClient();
 // void buttonLoop();
 // void shortPressed();
 // void longPressed();
@@ -124,15 +103,14 @@ void read_adc_bat(uint16_t *voltage);
 void read_adc_solar(uint16_t *voltage);
 
 // PWM definice
-#define PWM_GPIO GPIO_NUM_6                 // GPIO pro PWM výstup
-#define PWM_CHANNEL 1                       // PWM kanál
-#define PWM_FREQUENCY 25000                 // Frekvence PWM (25 kHz)
-#define PWM_RESOLUTION 10                   // Rozlišení PWM (10 bit, 0‑1023)
-#define PWM_MAX ((1 << PWM_RESOLUTION) - 1) // Maximální hodnota duty‑cycle (1023 pro 10‑bit)
-#define PWM_MIN 100                         // Minimální hodnota duty‑cycle (0)
+
 uint16_t pwm = 0;
 
 Preferences preferences; // Instance pro NVS Preferences
+
+// --- LED heartbeat definitions ---
+static TimerHandle_t ledTimer = NULL; // FreeRTOS timer for heartbeat LED
+static void ledTimerCallback(TimerHandle_t xTimer);
 
 // Globální proměnné
 static unsigned long buttonPressStartTime = 0;
@@ -649,7 +627,8 @@ bool mqttConnect()
     mqtt.subscribe(topicControl);
     publishMeasurements();
 
-    return mqtt.connected();
+    mqttConnected = mqtt.connected();
+    return mqttConnected;
 }
 
 void publishMeasurements()
@@ -672,12 +651,39 @@ void publishMeasurements()
     }
 }
 
+/**
+ * Heart‑beat LED pattern (non‑blocking)
+ * - If mqttConnected == true  → single 100 ms flash every 5 s
+ * - If mqttConnected == false → triple 100 ms flashes every 5 s
+ * Executed by a 100 ms FreeRTOS software timer.
+ */
+static void ledTimerCallback(TimerHandle_t /*xTimer*/)
+{
+    static uint32_t tick = 0;        // 100 ms ticks
+    const uint32_t periodTicks = 50; // 5 s / 100 ms
+    uint32_t idx = tick % periodTicks;
+
+    if (mqttConnected)
+    {
+        // One short flash at the start of each 5‑second window
+        digitalWrite(LED_PIN, (idx == 0) ? LOW : HIGH);
+    }
+    else
+    {
+        // Three flashes (idx 0,2,4) at the start of each window
+        bool on = (idx == 0 || idx == 2 || idx == 4);
+        digitalWrite(LED_PIN, on ? LOW : HIGH);
+    }
+
+    tick++;
+}
+
 void setup()
 {
     // Initialize ESP log system
     esp_log_level_set("*", ESP_LOG_INFO); // Set default log level to INFO for all tags
-    // esp_log_level_set(TAG, ESP_LOG_VERBOSE); // Set verbose logging for this module
-    // setupPWM();
+
+    setupPWM();
     // Inicializace NVS pro ukládání nastavení displeje
     // preferences.begin("display", false);
     lastActivityTime = millis();
@@ -690,7 +696,24 @@ void setup()
     // --- Snížení taktu CPU kvůli úspoře energie ---
     // setCpuFrequencyMhz(80); // 80 MHz místo výchozích 240 MHz
 
-    Serial.begin(115200);                  // Inicializace sériové komunikace
+    Serial.begin(115200); // Inicializace sériové komunikace
+
+    // --- LED heartbeat setup ---
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+
+    ledTimer = xTimerCreate(
+        "LedTimer",
+        pdMS_TO_TICKS(100), // 100 ms period
+        pdTRUE,             // auto‑reload
+        nullptr,
+        ledTimerCallback);
+
+    if (ledTimer != NULL)
+    {
+        xTimerStart(ledTimer, 0);
+    }
+
     vTaskDelay(4000 / portTICK_PERIOD_MS); // Zpoždění pro připojení sériového monitoru
 
     pinMode(PIN_ADC_BAT, INPUT);
@@ -722,7 +745,7 @@ void setup()
         // xTimerStart(publishTimer, 0);
     }
 
-    Wire.begin();
+    Wire.begin(I2C_SDA, I2C_SCL); // Inicializace I2C sběrnice
 
     if (ina228_bat.begin(bat_addr) && ina228_solar.begin(solar_addr))
     {
@@ -1007,50 +1030,50 @@ void measure()
 // }
 
 // Funkce pro nastavení WiFi klienta a OTA serveru
-void setupWiFiClient()
-{
-    // Připojení k WiFi síti
-    // WiFi.mode(WIFI_STA);
-    // // Nahraď SSID a heslo správnými údaji!
-    // WiFi.begin("Vivien", "Bionicman123");
+// void setupWiFiClient()
+// {
+// Připojení k WiFi síti
+// WiFi.mode(WIFI_STA);
+// // Nahraď SSID a heslo správnými údaji!
+// WiFi.begin("Vivien", "Bionicman123");
 
-    // ESP_LOGI(TAG, "Connecting to WiFi...");
+// ESP_LOGI(TAG, "Connecting to WiFi...");
 
-    // // Čekání na připojení
-    // int timeout = 20; // Maximální čas připojení (10 sekund)
-    // while (WiFi.status() != WL_CONNECTED && timeout > 0)
-    // {
-    //   delay(500);
-    //   ESP_LOGI(TAG, ".");
-    //   timeout--;
-    // }
+// // Čekání na připojení
+// int timeout = 20; // Maximální čas připojení (10 sekund)
+// while (WiFi.status() != WL_CONNECTED && timeout > 0)
+// {
+//   delay(500);
+//   ESP_LOGI(TAG, ".");
+//   timeout--;
+// }
 
-    // if (WiFi.status() == WL_CONNECTED)
-    // {
-    //   ESP_LOGI(TAG, "Connected to WiFi!");
-    //   IPAddress IP = WiFi.localIP();
-    //   ESP_LOGI(TAG, "Client IP address: %s", IP.toString().c_str());
+// if (WiFi.status() == WL_CONNECTED)
+// {
+//   ESP_LOGI(TAG, "Connected to WiFi!");
+//   IPAddress IP = WiFi.localIP();
+//   ESP_LOGI(TAG, "Client IP address: %s", IP.toString().c_str());
 
-    //   // Nastavení webového serveru
-    //   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-    //             {
-    //     String html = "<html><body>";
-    //     html += "<h1>FanSpeed</h1>";
-    //     html += "<p><a href='/update'>Update firmware</a> (login: admin, password: admin)</p>";
-    //     html += "</body></html>";
-    //     request->send(200, "text/html", html); });
+//   // Nastavení webového serveru
+//   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+//             {
+//     String html = "<html><body>";
+//     html += "<h1>FanSpeed</h1>";
+//     html += "<p><a href='/update'>Update firmware</a> (login: admin, password: admin)</p>";
+//     html += "</body></html>";
+//     request->send(200, "text/html", html); });
 
-    //   server.onNotFound(notFound);
+//   server.onNotFound(notFound);
 
-    //   // Nastavení OTA aktualizačního serveru s přihlašovacími údaji
-    //   updateServer.setup(&server, "admin", "admin");
-    //   server.begin(); // Spuštění webového serveru
-    // }
-    // else
-    // {
-    //   ESP_LOGI(TAG, "Failed to connect to WiFi!");
-    // }
-}
+//   // Nastavení OTA aktualizačního serveru s přihlašovacími údaji
+//   updateServer.setup(&server, "admin", "admin");
+//   server.begin(); // Spuštění webového serveru
+// }
+// else
+// {
+//   ESP_LOGI(TAG, "Failed to connect to WiFi!");
+// }
+// }
 
 void gsmSetup()
 {
@@ -1083,7 +1106,6 @@ void gsmSetup()
     {
         ESP_LOGE(TAG, "MQTT connect failed");
     }
-
     if (modem.isNetworkConnected())
     {
         ESP_LOGI(TAG, "Network connected");
