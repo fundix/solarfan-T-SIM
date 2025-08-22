@@ -8,8 +8,6 @@
 #include "freertos/task.h"
 #define TAG "MAIN"
 
-#define TINY_GSM_DEBUG Serial
-
 // Check if PSRAM is available and initialize canvas with PSRAM
 #include "globals.h"
 #include "credentials.h"
@@ -414,38 +412,45 @@ static void modemPowerOff()
 // Full attach sequence taken from Arduino_NetworkTest.ino
 bool modemConnect()
 {
-    modemPowerOn();
+    // Initialize UART once here
+    SerialAT.end();
     SerialAT.begin(UART_BAUD, SERIAL_8N1, PIN_RX, PIN_TX);
 
-    // 1) Wait until AT replies, try hard‑reset every 30 s if silent
-    uint32_t t0 = millis();
-    while (!modem.testAT())
+    // Quick probe first — avoid unnecessary PWRKEY pulses that can cause resets
+    if (!modem.testAT(500))
     {
-        if (millis() - t0 > 30000)
+        // Modem appears OFF → toggle PWRKEY to turn it on
+        modemPowerOn();
+
+        // Wait until AT replies; try hard-reset every 30 s if still silent
+        uint32_t t0 = millis();
+        while (!modem.testAT())
         {
-            modemPowerOff();
-            delay(3000);
-            modemPowerOn();
-            t0 = millis();
+            if (millis() - t0 > 30000)
+            {
+                modemPowerOff();
+                delay(3000);
+                modemPowerOn();
+                t0 = millis();
+            }
+            delay(500);
         }
-        delay(500);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Modem already ON");
     }
 
     // 2) SIM ready?
     if (modem.getSimStatus() != SIM_READY)
         return false;
 
-    // 3) Radio setup – GSM‑only (2 G) – faster attach, no LTE
-    // Allow just GSM bands; you can narrow the list further if desired
+    // 3) Radio setup – GSM‑only (2G) as in your original code
     modem.sendAT("+CBAND=GSM850P,GSM900P,DCS1800P,PCS1900P");
     modem.setPreferredMode(1); // 1 = GSM
     modem.setNetworkMode(1);   // 1 = GSM only
 
-    // modem.sendAT("+CBAND=ALL_MODE"); // let FW scan entire band map
-    // modem.setPreferredMode(3);       // 3 = Cat‑M + NB‑IoT
-    // modem.setNetworkMode(2);         // 2 = Automatic (LTE+GSM)
-
-    // 4) Wait for network registration (max 180 s)
+    // 4) Wait for network registration (max 180 s)
     SIM70xxRegStatus reg;
     uint32_t limit = millis() + 180000;
     do
@@ -458,7 +463,7 @@ bool modemConnect()
     if (reg != REG_OK_HOME && reg != REG_OK_ROAMING)
         return false;
 
-    // 5) PDP attach with Hologram APN
+    // 5) PDP attach
     if (!modem.gprsConnect(apn, gprsUser, gprsPass))
         return false;
 
@@ -886,15 +891,15 @@ void measure()
     solar_power = ina228_solar.readPower();
 
     // Table header
-    ESP_LOGI(TAG, "Battery & Solar Measurements Table");
-    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
-    ESP_LOGI(TAG, "| Parameter     | Battery     | Solar       |");
-    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
-    // ESP_LOGI(TAG, "| Shunt Voltage | %8.2f mV | %8.2f mV |", bat_shuntVoltage, solar_shuntVoltage);
-    ESP_LOGI(TAG, "| Bus Voltage   | %8.2f V  | %8.2f V  |", bat_busVoltage, solar_busVoltage);
-    ESP_LOGI(TAG, "| Current       | %8.2f mA | %8.2f mA |", bat_current, solar_current);
-    ESP_LOGI(TAG, "| Power         | %8.1f mW | %8.1f mW |", bat_power, solar_power);
-    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    // ESP_LOGI(TAG, "Battery & Solar Measurements Table");
+    // ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    // ESP_LOGI(TAG, "| Parameter     | Battery     | Solar       |");
+    // ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    // // ESP_LOGI(TAG, "| Shunt Voltage | %8.2f mV | %8.2f mV |", bat_shuntVoltage, solar_shuntVoltage);
+    // ESP_LOGI(TAG, "| Bus Voltage   | %8.2f V  | %8.2f V  |", bat_busVoltage, solar_busVoltage);
+    // ESP_LOGI(TAG, "| Current       | %8.2f mA | %8.2f mA |", bat_current, solar_current);
+    // ESP_LOGI(TAG, "| Power         | %8.1f mW | %8.1f mW |", bat_power, solar_power);
+    // ESP_LOGI(TAG, "+---------------+-------------+-------------+");
 }
 
 // Funkce pro zpracování stisku tlačítka
@@ -1091,13 +1096,8 @@ void measure()
 
 void gsmSetup()
 {
-    ESP_LOGI(TAG, "Starting GSM modem Serial...");
+    ESP_LOGI(TAG, "Starting GSM modem...");
 
-    // First bring up the UART so we can probe the modem state
-    SerialAT.end();
-    SerialAT.begin(UART_BAUD, SERIAL_8N1, PIN_RX, PIN_TX);
-
-    // Now power the modem on – the routine will skip the pulse if it already responds
     if (!modemConnect())
     {
         ESP_LOGE(TAG, "Modem failed to attach – rebooting");
@@ -1105,14 +1105,9 @@ void gsmSetup()
     }
     disableGPS();
 
-    // SerialAT.setPins(ATOM_DTU_SIM7028_RX, ATOM_DTU_SIM7028_TX, -1); // Nastavení pinů pro RX, TX, RST (pokud není potřeba, použijte -1)
-    delay(100);
-
     String modemInfo = modem.getModemInfo();
     Serial.print(F("Modem: "));
     Serial.println(modemInfo);
-
-    // gsmConnect();
 
     mqtt.setServer(broker, mqttPort);
     mqtt.setCallback(mqttCallback);
