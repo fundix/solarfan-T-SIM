@@ -475,13 +475,24 @@ void mqttCallback(char *topic, byte *payload, unsigned int len)
         // ledStatus = !ledStatus;
         // Convert payload to string and then to integer
         String msg = String((char *)payload, len);
-        pwm = msg.toInt();
-        // Ensure pwm value is within valid range (0‑PWM_MAX for 10‑bit resolution)
-        pwm = constrain(pwm, 0, PWM_MAX); // Udrž hodnotu v rozsahu rozlišení
-        // Set PWM value
-        if (pwm < PWM_MIN)
+        if (msg == "ON")
         {
-            pwm = 0; // Ensure minimum duty cycle
+            pwm = PWM_MAX; // Set to maximum duty cycle
+        }
+        else if (msg == "OFF")
+        {
+            pwm = 0;
+        }
+        else
+        {
+            pwm = msg.toInt();
+            // Ensure pwm value is within valid range (0‑PWM_MAX for 10‑bit resolution)
+            pwm = constrain(pwm, 0, PWM_MAX); // Udrž hodnotu v rozsahu rozlišení
+            // Set PWM value
+            if (pwm < PWM_MIN)
+            {
+                pwm = 0; // Ensure minimum duty cycle
+            }
         }
 
         ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(PWM_CHANNEL), pwm);
@@ -639,11 +650,14 @@ void publishMeasurements()
     payload += ",\"hum\":" + String(BLE_humidity, 1);
     payload += ",\"bv\":" + String(BLE_voltage, 3);
     payload += ",\"batv\":" + String(bat_busVoltage, 2);
-    payload += ",\"bp\":" + String(bat_current * bat_busVoltage, 0);
+    payload += ",\"bp\":" + String(bat_power, 0);
+    payload += ",\"bc\":" + String(bat_current, 0);
     payload += ",\"sv\":" + String(solar_busVoltage, 2);
     payload += ",\"sp\":" + String(solar_power, 0);
     payload += ",\"pwm\":" + String(pwm);
     payload += "}";
+
+    ESP_LOGI(TAG, "Publishing measurements: %s", payload.c_str());
 
     if (mqtt.connected())
     {
@@ -817,20 +831,20 @@ void loop()
     // BLE scanning and connection to sensors named "LYWSD03MMC"
     // (Non-blocking scan and connection handled by MyAdvertisedDeviceCallbacks)
 
-    // static unsigned long lastDrawTime = 0;
-    // unsigned long currentTime = millis();
-    // if (currentTime - lastDrawTime >= 1000)
-    // {
-    // measure();
-    // drawGUI();
-    // lastDrawTime = currentTime;
+    static unsigned long lastDrawTime = 0;
+    unsigned long currentTime = millis();
+    if (currentTime - lastDrawTime >= 5000)
+    {
+        measure();
+        // drawGUI();
+        lastDrawTime = currentTime;
 
-    // if (!displaySleeping && (millis() - lastActivityTime > 120000UL))
-    // {
-    //     M5.Display.sleep(); // turns the panel off (M5Unified)
-    //     displaySleeping = true;
-    // }
-    // }
+        // if (!displaySleeping && (millis() - lastActivityTime > 120000UL))
+        // {
+        //     M5.Display.sleep(); // turns the panel off (M5Unified)
+        //     displaySleeping = true;
+        // }
+    }
 
     if (doConnect)
     {
@@ -872,15 +886,15 @@ void measure()
     solar_power = ina228_solar.readPower();
 
     // Table header
-    ESP_LOGV(TAG, "Battery & Solar Measurements Table");
-    ESP_LOGV(TAG, "+---------------+-------------+-------------+");
-    ESP_LOGV(TAG, "| Parameter     | Battery     | Solar       |");
-    ESP_LOGV(TAG, "+---------------+-------------+-------------+");
-    // ESP_LOGV(TAG, "| Shunt Voltage | %8.2f mV | %8.2f mV |", bat_shuntVoltage, solar_shuntVoltage);
-    ESP_LOGV(TAG, "| Bus Voltage   | %8.2f V  | %8.2f V  |", bat_busVoltage, solar_busVoltage);
-    // ESP_LOGV(TAG, "| Current       | %8.2f mA | %8.2f mA |", bat_current, solar_current);
-    ESP_LOGV(TAG, "| Power         | %8.1f mW | %8.1f mW |", bat_power, solar_power);
-    ESP_LOGV(TAG, "+---------------+-------------+-------------+");
+    ESP_LOGI(TAG, "Battery & Solar Measurements Table");
+    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    ESP_LOGI(TAG, "| Parameter     | Battery     | Solar       |");
+    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    // ESP_LOGI(TAG, "| Shunt Voltage | %8.2f mV | %8.2f mV |", bat_shuntVoltage, solar_shuntVoltage);
+    ESP_LOGI(TAG, "| Bus Voltage   | %8.2f V  | %8.2f V  |", bat_busVoltage, solar_busVoltage);
+    ESP_LOGI(TAG, "| Current       | %8.2f mA | %8.2f mA |", bat_current, solar_current);
+    ESP_LOGI(TAG, "| Power         | %8.1f mW | %8.1f mW |", bat_power, solar_power);
+    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
 }
 
 // Funkce pro zpracování stisku tlačítka
