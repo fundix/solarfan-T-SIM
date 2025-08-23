@@ -421,6 +421,7 @@ bool modemConnect()
     uint32_t t0 = millis();
     while (!modem.testAT())
     {
+        ESP_LOGI(TAG, "Waiting for modem to respond to AT command...");
         if (millis() - t0 > 30000)
         {
             modemPowerOff();
@@ -433,8 +434,26 @@ bool modemConnect()
 
     // 2) SIM ready?
     if (modem.getSimStatus() != SIM_READY)
+    {
+        ESP_LOGI(TAG, "SIM card is not ready");
         return false;
+    }
 
+    ESP_LOGI(TAG, "SIM card is ready");
+    // Get modem firmware version (robust)
+    String fw = modem.getModemRevision();
+    fw.trim();
+    if (fw.length() == 0 || fw.equalsIgnoreCase("ERROR"))
+    {
+        // Fallback – some firmware returns empty/ERROR for +CGMR until later
+        String info = modem.getModemInfo();
+        info.trim();
+        if (info.length() > 0)
+        {
+            fw = info; // Use modem info (contains revision on many SIM7000 builds)
+        }
+    }
+    ESP_LOGI(TAG, "Modem FW version: %s", fw.c_str());
     // 3) Radio setup – GSM‑only (2 G) – faster attach, no LTE
     // Allow just GSM bands; you can narrow the list further if desired
     modem.sendAT("+CBAND=GSM850P,GSM900P,DCS1800P,PCS1900P");
@@ -455,6 +474,7 @@ bool modemConnect()
             return false;
         delay(500);
     } while (reg != REG_OK_HOME && reg != REG_OK_ROAMING && millis() < limit);
+
     if (reg != REG_OK_HOME && reg != REG_OK_ROAMING)
         return false;
 
@@ -886,15 +906,15 @@ void measure()
     solar_power = ina228_solar.readPower();
 
     // Table header
-    ESP_LOGI(TAG, "Battery & Solar Measurements Table");
-    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
-    ESP_LOGI(TAG, "| Parameter     | Battery     | Solar       |");
-    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
-    // ESP_LOGI(TAG, "| Shunt Voltage | %8.2f mV | %8.2f mV |", bat_shuntVoltage, solar_shuntVoltage);
-    ESP_LOGI(TAG, "| Bus Voltage   | %8.2f V  | %8.2f V  |", bat_busVoltage, solar_busVoltage);
-    ESP_LOGI(TAG, "| Current       | %8.2f mA | %8.2f mA |", bat_current, solar_current);
-    ESP_LOGI(TAG, "| Power         | %8.1f mW | %8.1f mW |", bat_power, solar_power);
-    ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    // ESP_LOGI(TAG, "Battery & Solar Measurements Table");
+    // ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    // ESP_LOGI(TAG, "| Parameter     | Battery     | Solar       |");
+    // ESP_LOGI(TAG, "+---------------+-------------+-------------+");
+    // // ESP_LOGI(TAG, "| Shunt Voltage | %8.2f mV | %8.2f mV |", bat_shuntVoltage, solar_shuntVoltage);
+    // ESP_LOGI(TAG, "| Bus Voltage   | %8.2f V  | %8.2f V  |", bat_busVoltage, solar_busVoltage);
+    // ESP_LOGI(TAG, "| Current       | %8.2f mA | %8.2f mA |", bat_current, solar_current);
+    // ESP_LOGI(TAG, "| Power         | %8.1f mW | %8.1f mW |", bat_power, solar_power);
+    // ESP_LOGI(TAG, "+---------------+-------------+-------------+");
 }
 
 // Funkce pro zpracování stisku tlačítka
