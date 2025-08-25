@@ -412,18 +412,71 @@ static void modemPowerOff()
 }
 
 // Full attach sequence taken from Arduino_NetworkTest.ino
+// Helper: Dump modem registration and band info for debugging
+static void dumpModemSnapshot(const char* where)
+{
+    // Collect raw AT responses into a String via waitResponse(..., String&)
+    String resp;
+
+    // COPS?
+    modem.sendAT("+COPS?");
+    resp = ""; modem.waitResponse(1500, resp);
+    ESP_LOGI(TAG, "[%s] +COPS?: %s", where, resp.c_str());
+
+    // CEREG?
+    modem.sendAT("+CEREG?");
+    resp = ""; modem.waitResponse(1500, resp);
+    ESP_LOGI(TAG, "[%s] +CEREG?: %s", where, resp.c_str());
+
+    // CREG?
+    modem.sendAT("+CREG?");
+    resp = ""; modem.waitResponse(1500, resp);
+    ESP_LOGI(TAG, "[%s] +CREG?: %s", where, resp.c_str());
+
+    // CGREG?
+    modem.sendAT("+CGREG?");
+    resp = ""; modem.waitResponse(1500, resp);
+    ESP_LOGI(TAG, "[%s] +CGREG?: %s", where, resp.c_str());
+
+    // CNMP?
+    modem.sendAT("+CNMP?");
+    resp = ""; modem.waitResponse(1500, resp);
+    ESP_LOGI(TAG, "[%s] +CNMP?: %s", where, resp.c_str());
+
+    // CMNB?
+    modem.sendAT("+CMNB?");
+    resp = ""; modem.waitResponse(1500, resp);
+    ESP_LOGI(TAG, "[%s] +CMNB?: %s", where, resp.c_str());
+
+    // CBAND?
+    modem.sendAT("+CBAND?");
+    resp = ""; modem.waitResponse(1500, resp);
+    ESP_LOGI(TAG, "[%s] +CBAND?: %s", where, resp.c_str());
+
+    // CBANDCFG?
+    modem.sendAT("+CBANDCFG?");
+    resp = ""; modem.waitResponse(2000, resp);
+    ESP_LOGI(TAG, "[%s] +CBANDCFG?: %s", where, resp.c_str());
+
+    // CPSI?
+    modem.sendAT("+CPSI?");
+    resp = ""; modem.waitResponse(2000, resp);
+    ESP_LOGI(TAG, "[%s] +CPSI?: %s", where, resp.c_str());
+}
+
 bool modemConnect()
 {
+    ESP_LOGI(TAG, "Powering modem ON...");
     modemPowerOn();
     SerialAT.begin(UART_BAUD, SERIAL_8N1, PIN_RX, PIN_TX);
 
-    // 1) Wait until AT replies, try hard‑reset every 30 s if silent
     uint32_t t0 = millis();
     while (!modem.testAT())
     {
-        ESP_LOGI(TAG, "Waiting for modem to respond to AT command...");
+        ESP_LOGW(TAG, "No response to AT (elapsed %lu ms)", millis() - t0);
         if (millis() - t0 > 30000)
         {
+            ESP_LOGW(TAG, "No AT for 30s, hard reset...");
             modemPowerOff();
             delay(3000);
             modemPowerOn();
@@ -431,58 +484,74 @@ bool modemConnect()
         }
         delay(500);
     }
+    ESP_LOGI(TAG, "Modem responded to AT");
+    dumpModemSnapshot("AT_OK");
 
-    // 2) SIM ready?
-    if (modem.getSimStatus() != SIM_READY)
+    int simStatus = modem.getSimStatus();
+    ESP_LOGI(TAG, "SIM status: %d", simStatus);
+    if (simStatus != SIM_READY)
     {
-        ESP_LOGI(TAG, "SIM card is not ready");
+        ESP_LOGE(TAG, "SIM card not ready, aborting");
         return false;
     }
+    dumpModemSnapshot("SIM_READY");
 
-    ESP_LOGI(TAG, "SIM card is ready");
-    // Get modem firmware version (robust)
     String fw = modem.getModemRevision();
-    fw.trim();
-    if (fw.length() == 0 || fw.equalsIgnoreCase("ERROR"))
-    {
-        // Fallback – some firmware returns empty/ERROR for +CGMR until later
-        String info = modem.getModemInfo();
-        info.trim();
-        if (info.length() > 0)
-        {
-            fw = info; // Use modem info (contains revision on many SIM7000 builds)
-        }
-    }
-    ESP_LOGI(TAG, "Modem FW version: %s", fw.c_str());
-    // 3) Radio setup – GSM‑only (2 G) – faster attach, no LTE
-    // Allow just GSM bands; you can narrow the list further if desired
-    modem.sendAT("+CBAND=GSM850P,GSM900P,DCS1800P,PCS1900P");
-    modem.setPreferredMode(1); // 1 = GSM
-    modem.setNetworkMode(1);   // 1 = GSM only
+    ESP_LOGI(TAG, "Modem FW: %s", fw.c_str());
 
-    // modem.sendAT("+CBAND=ALL_MODE"); // let FW scan entire band map
-    // modem.setPreferredMode(3);       // 3 = Cat‑M + NB‑IoT
-    // modem.setNetworkMode(2);         // 2 = Automatic (LTE+GSM)
+    // modem.sendAT("+CBAND=GSM850P,GSM900P,DCS1800P,PCS1900P"); // GSM only; LTE uses +CBANDCFG
+    modem.setPreferredMode(1);
+    modem.setNetworkMode(1);
+    // Force LTE only + Cat‑M1 (older Hologram SIMs typically do not support NB‑IoT)
+    modem.sendAT("+CNMP=38"); modem.waitResponse(2000);
+    modem.sendAT("+CMNB=1");  modem.waitResponse(2000);
+    // Optional: query current/supported LTE bands
+    modem.sendAT("+CBANDCFG?"); modem.waitResponse(1500);
+    modem.sendAT("+CBANDCFG=?"); modem.waitResponse(1500);
 
-    // 4) Wait for network registration (max 180 s)
+    ESP_LOGI(TAG, "Waiting for network registration...");
     SIM70xxRegStatus reg;
     uint32_t limit = millis() + 180000;
+    uint32_t lastLog = 0;
+    int lastReg = -1;
     do
     {
         reg = modem.getRegistrationStatus();
+        // Adaptive logging: always log if state changes, or every 15 s
+        if ((int)reg != lastReg || millis() - lastLog > 15000)
+        {
+            ESP_LOGI(TAG, "Registration status: %d (elapsed %lus)", reg, (millis() - (limit - 180000)) / 1000);
+            dumpModemSnapshot("REG_LOOP");
+            lastLog = millis();
+            lastReg = (int)reg;
+        }
         if (reg == REG_DENIED)
+        {
+            ESP_LOGE(TAG, "Registration denied! Dumping modem state and aborting.");
+            dumpModemSnapshot("REG_DENIED");
             return false;
-        delay(500);
+        }
+        delay(1000);
     } while (reg != REG_OK_HOME && reg != REG_OK_ROAMING && millis() < limit);
 
     if (reg != REG_OK_HOME && reg != REG_OK_ROAMING)
+    {
+        ESP_LOGE(TAG, "Failed to register to network");
+        dumpModemSnapshot("REG_FAIL");
         return false;
+    }
+    ESP_LOGI(TAG, "Network registered");
+    dumpModemSnapshot("REGISTERED");
 
-    // 5) PDP attach with Hologram APN
+    ESP_LOGI(TAG, "Attaching GPRS with APN: %s", apn);
     if (!modem.gprsConnect(apn, gprsUser, gprsPass))
+    {
+        ESP_LOGE(TAG, "GPRS attach failed");
         return false;
+    }
 
-    return true; // modem has IP, ready for MQTT
+    ESP_LOGI(TAG, "Connected. Local IP: %s", modem.getLocalIP().c_str());
+    return true;
 }
 
 void mqttCallback(char *topic, byte *payload, unsigned int len)
@@ -916,198 +985,6 @@ void measure()
     // ESP_LOGI(TAG, "| Power         | %8.1f mW | %8.1f mW |", bat_power, solar_power);
     // ESP_LOGI(TAG, "+---------------+-------------+-------------+");
 }
-
-// Funkce pro zpracování stisku tlačítka
-// void buttonLoop()
-// {
-//     if (digitalRead(BTN1) == LOW)
-//     { // Tlačítko stisknuto (aktivní LOW)
-//         if (!buttonPressed)
-//         {
-//             buttonPressed = true;
-//             buttonPressStartTime = millis();
-//         }
-//         // Pokud držíte tlačítko déle než 2 sekundy a ještě nebyl detekován dlouhý stisk
-//         else if (!longButtonPressed && (millis() - buttonPressStartTime > 2000))
-//         {
-//             longButtonPressed = true;
-//             longPressed(); // Zavoláme funkci pro dlouhý stisk
-//         }
-
-//         if (displaySleeping)
-//         {
-//             M5.Display.wakeup();
-//             M5.Display.setBrightness(20); // your normal brightness
-//             displaySleeping = false;
-//         }
-//         resetInactivityTimer();
-//     }
-//     else
-//     { // Tlačítko uvolněno
-//         if (buttonPressed)
-//         {
-//             if (!longButtonPressed)
-//             {
-//                 shortPressed(); // Zavoláme funkci pro krátký stisk
-//             }
-//             // Resetujeme stav tlačítka
-//             buttonPressed = false;
-//             longButtonPressed = false;
-//         }
-//     }
-// }
-
-// Funkce pro krátký stisk tlačítka
-// void shortPressed()
-// {
-//     ESP_LOGI(TAG, "Short button press");
-
-//     // Změna úhlu rotace displeje
-// }
-
-// // Funkce pro dlouhý stisk tlačítka
-// void longPressed()
-// {
-//     ESP_LOGI(TAG, "Long button press");
-//     rotationAngle = fmod(rotationAngle + 15, 360.0f);
-//     preferences.putFloat("rotation", rotationAngle); // Uložení nového úhlu
-//                                                      // if (updateStarted)
-//                                                      // {
-//                                                      //   ESP.restart(); // Restart zařízení, pokud je aktualizace spuštěna
-//                                                      //   return;
-//                                                      // }
-//                                                      // preferences.end(); // Uzavření NVS Preferences
-
-//     // setupWiFiClient(); // Spuštění WiFi klienta a OTA serveru
-
-//     // updateStarted = true; // Nastavení příznaku, že aktualizace začala
-// }
-
-// Funkce pro kreslení grafického uživatelského rozhraní
-// void drawGUI()
-// {
-//     if (displaySleeping)
-//         return;
-
-//     canvas.fillSprite(BLACK); // Vyplnění canvasu černou barvou
-//     // Vykreslení kruhu pro ukazatel rychlosti
-//     int centerX = canvas.width() / 2;
-//     int centerY = canvas.height() / 2;
-
-//     if (updateStarted)
-//     {
-//         // Update mode display
-//         canvas.setTextSize(0.6);
-//         canvas.setTextDatum(middle_center);
-//         canvas.drawString("Updating", centerX, centerY - 11);
-
-//         // if (WiFi.status() == WL_CONNECTED)
-//         // {
-//         //   IPAddress IP = WiFi.localIP();
-//         //   canvas.setTextSize(0.4);
-//         //   canvas.drawString(IP.toString().c_str(), centerX, centerY + 11);
-//         // }
-//     }
-//     else
-//     {
-//         // Nastavení pro canvas (jak bylo poskytnuto)
-//         // --- Nastavení pro canvas ---
-//         canvas.setFont(&fonts::Font4); // Nastavení písma (Font4 je dobrá volba pro čitelnost)
-//         canvas.setTextSize(0.6);       // Nastavení velikosti textu pro všechny výpisy
-//         // canvas.setTextDatum(middle_center); // Zarovnání textu na střed (horizontálně i vertikálně)
-
-//         int x = 10;           // Středová osa X displeje
-//         int y = 10;           // Počáteční pozice Y pro střed prvního řádku textu
-//         int lineSpacing = 17; // Mezera mezi středy řádků textu (upraveno pro velikost písma 0.6)
-
-//         // --- Vykreslení informací na displej ---
-//         // 2. Sekce Solárního panelu - zkrácené popisky
-//         canvas.drawString("Solar", x, y); // Zkrácený název
-//         if (mqttConnected)
-//         {
-//             canvas.drawString("Mqtt 1", x + 60, y);
-//         }
-//         else
-//         {
-//             canvas.drawString("Mqtt 0", x + 60, y);
-//         }
-//         y += lineSpacing; // Mezera před další sekcí
-
-//         canvas.drawString(String(solar_busVoltage, 2) + "  V", x, y);
-//         canvas.drawString(String(solar_power, 0) + "  mW", x + 50, y);
-//         y += lineSpacing; // Mezera před další sekcí
-
-//         // 3. Sekce Baterie - zkrácené popisky
-//         canvas.drawString("Bat", x, y); // Zkrácený název
-//         y += lineSpacing;               // Mezera před další sekcí
-
-//         canvas.drawString(String(bat_busVoltage, 2) + "  V", x, y);
-//         canvas.drawString(String(bat_current * bat_busVoltage, 0) + "  mW", x + 50, y);
-
-//         y += lineSpacing; // Mezera před další sekcí
-//         // 4. Sekce BLE Senzor - zkrácené popisky
-//         canvas.drawString("BLE", x, y); // Zkrácený název
-//         y += lineSpacing;               // Mezera před další sekcí
-//         canvas.drawString(String(BLE_temperature, 2) + "  °C", x, y);
-//         canvas.drawString(String(BLE_humidity, 1) + "  %", x + 60, y);
-//         y += lineSpacing; // Mezera před další sekcí
-//         canvas.drawString(String(BLE_voltage, 3) + "  V", x, y);
-//     }
-
-//     // Otočení a zobrazení canvasu na displeji
-//     canvas.pushRotated(rotationAngle);
-// }
-
-// void notFound(AsyncWebServerRequest *request)
-// {
-//   request->send(404, "text/plain", "Not found");
-// }
-
-// Funkce pro nastavení WiFi klienta a OTA serveru
-// void setupWiFiClient()
-// {
-// Připojení k WiFi síti
-// WiFi.mode(WIFI_STA);
-// // Nahraď SSID a heslo správnými údaji!
-// WiFi.begin("Vivien", "Bionicman123");
-
-// ESP_LOGI(TAG, "Connecting to WiFi...");
-
-// // Čekání na připojení
-// int timeout = 20; // Maximální čas připojení (10 sekund)
-// while (WiFi.status() != WL_CONNECTED && timeout > 0)
-// {
-//   delay(500);
-//   ESP_LOGI(TAG, ".");
-//   timeout--;
-// }
-
-// if (WiFi.status() == WL_CONNECTED)
-// {
-//   ESP_LOGI(TAG, "Connected to WiFi!");
-//   IPAddress IP = WiFi.localIP();
-//   ESP_LOGI(TAG, "Client IP address: %s", IP.toString().c_str());
-
-//   // Nastavení webového serveru
-//   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-//             {
-//     String html = "<html><body>";
-//     html += "<h1>FanSpeed</h1>";
-//     html += "<p><a href='/update'>Update firmware</a> (login: admin, password: admin)</p>";
-//     html += "</body></html>";
-//     request->send(200, "text/html", html); });
-
-//   server.onNotFound(notFound);
-
-//   // Nastavení OTA aktualizačního serveru s přihlašovacími údaji
-//   updateServer.setup(&server, "admin", "admin");
-//   server.begin(); // Spuštění webového serveru
-// }
-// else
-// {
-//   ESP_LOGI(TAG, "Failed to connect to WiFi!");
-// }
-// }
 
 void gsmSetup()
 {
